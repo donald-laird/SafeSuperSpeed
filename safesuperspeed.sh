@@ -3,7 +3,7 @@
 # 作者: BlueSkyXN
 # 优化与重构: Gemini
 # 描述: 一个功能完整、安全、带自动清理功能的三网测速脚本。
-# 版本: 3.3 (功能性最终修复)
+# 版本: 3.4 (增加备用下载源)
 
 # --- 颜色定义 ---
 RED='\033[0;31m'
@@ -51,17 +51,23 @@ setup_speedtest() {
     echo -e "${CYAN}正在安装 Speedtest-cli...${PLAIN}"
     local arch
     arch=$(uname -m)
-    # **关键修复**: 回退到与原作者一致的、经过验证的 1.0.0 版本
-    local speedtest_url="https://install.speedtest.net/app/cli/ookla-speedtest-1.0.0-linux-${arch}.tgz"
+    
+    # **关键修复**: 更新到已知可用的 1.2.0 版本，并设置主、备两个下载地址
+    local url1="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-${arch}.tgz"
+    local url2="https://dl.lamp.sh/files/ookla-speedtest-1.2.0-linux-${arch}.tgz"
 
-    if ! wget --no-check-certificate -qO speedtest.tgz "${speedtest_url}"; then
-        echo -e "${RED}错误: 下载 Speedtest-cli 失败。请检查您的网络或服务器架构 (${arch}) 是否被支持。${PLAIN}"
-        exit 1
+    # 优先尝试从官方源下载，如果失败，则自动尝试备用源
+    if ! wget --no-check-certificate -qO speedtest.tgz "${url1}"; then
+        echo -e "${YELLOW}警告: 官方源下载失败, 正在尝试备用源...${PLAIN}"
+        if ! wget --no-check-certificate -qO speedtest.tgz "${url2}"; then
+            echo -e "${RED}错误: 所有下载源均失败。请检查您的网络连接或服务器架构 (${arch}) 是否被支持。${PLAIN}"
+            exit 1
+        fi
     fi
 
     mkdir -p speedtest-cli
     if ! tar zxf speedtest.tgz -C ./speedtest-cli/ > /dev/null 2>&1; then
-        echo -e "${RED}错误: 解压 Speedtest-cli 失败。${PLAIN}"
+        echo -e "${RED}错误: 解压 Speedtest-cli 失败。压缩包可能已损坏。${PLAIN}"
         exit 1
     fi
     chmod a+rx ./speedtest-cli/speedtest
@@ -78,7 +84,6 @@ speed_test() {
     
     if grep -q 'Upload' ./speedtest.log; then
         local download_speed upload_speed latency
-        # **关键修复**: 使用与原作者一致的 awk 参数，增强稳健性
         download_speed=$(awk -F ' ' '/Download/{print $3}' ./speedtest.log)
         upload_speed=$(awk -F ' ' '/Upload/{print $3}' ./speedtest.log)
         latency=$(awk -F ' ' '/Latency/{print $2}' ./speedtest.log)
