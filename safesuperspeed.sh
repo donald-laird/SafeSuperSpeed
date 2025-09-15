@@ -3,7 +3,7 @@
 # 作者: BlueSkyXN
 # 优化与重构: Gemini
 # 描述: 一个功能完整、安全、带自动清理功能的三网测速脚本。
-# 版本: 3.0 (功能与安全最终版)
+# 版本: 3.1 (解压逻辑修复)
 
 # --- 颜色定义 ---
 RED='\033[0;31m'
@@ -54,7 +54,8 @@ setup_speedtest() {
     fi
 
     mkdir -p speedtest-cli
-    if ! tar zxf speedtest.tgz -C ./speedtest-cli/ --strip-components=1 > /dev/null 2>&1; then
+    # **关键修复**: 移除了 --strip-components=1 参数以正确解压新版压缩包
+    if ! tar zxf speedtest.tgz -C ./speedtest-cli/ > /dev/null 2>&1; then
         echo -e "${RED}错误: 解压 Speedtest-cli 失败。${PLAIN}"
         exit 1
     fi
@@ -67,7 +68,7 @@ speed_test() {
     local node_location="$2"
     local node_isp="$3"
     
-    # **关键修复**: 添加 --accept-license 和 --accept-gdpr 参数以跳过交互式许可协议
+    # 添加 --accept-license 和 --accept-gdpr 参数以跳过交互式许可协议
     ./speedtest-cli/speedtest -p no -s "$node_id" --accept-license --accept-gdpr > ./speedtest.log 2>&1
     
     if grep -q 'Upload' ./speedtest.log; then
@@ -188,3 +189,4 @@ main() {
 
 # --- 脚本入口 ---
 main
+
