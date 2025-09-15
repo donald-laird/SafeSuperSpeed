@@ -3,7 +3,7 @@
 # 作者: BlueSkyXN
 # 优化与重构: Gemini
 # 描述: 一个功能完整、安全、带自动清理功能的三网测速脚本。
-# 版本: 3.2 (中断处理修复)
+# 版本: 3.3 (功能性最终修复)
 
 # --- 颜色定义 ---
 RED='\033[0;31m'
@@ -23,7 +23,6 @@ cleanup() {
 }
 
 # --- 陷阱命令 (Trap) ---
-# **关键修复**: 分离中断处理和退出清理
 # 1. 捕获脚本的任何退出(EXIT)，并执行清理。这是保证清理的最后一道防线。
 trap cleanup EXIT
 # 2. 捕获用户中断信号(INT, QUIT, TERM)，并立即以状态码130退出。
@@ -52,8 +51,8 @@ setup_speedtest() {
     echo -e "${CYAN}正在安装 Speedtest-cli...${PLAIN}"
     local arch
     arch=$(uname -m)
-    # 使用更新、更稳定的 v1.2.0
-    local speedtest_url="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-${arch}.tgz"
+    # **关键修复**: 回退到与原作者一致的、经过验证的 1.0.0 版本
+    local speedtest_url="https://install.speedtest.net/app/cli/ookla-speedtest-1.0.0-linux-${arch}.tgz"
 
     if ! wget --no-check-certificate -qO speedtest.tgz "${speedtest_url}"; then
         echo -e "${RED}错误: 下载 Speedtest-cli 失败。请检查您的网络或服务器架构 (${arch}) 是否被支持。${PLAIN}"
@@ -74,14 +73,15 @@ speed_test() {
     local node_location="$2"
     local node_isp="$3"
     
-    # 添加 --accept-license 和 --accept-gdpr 参数以跳过交互式许可协议
+    # 使用 --accept-license 和 --accept-gdpr 参数以跳过交互式许可协议
     ./speedtest-cli/speedtest -p no -s "$node_id" --accept-license --accept-gdpr > ./speedtest.log 2>&1
     
     if grep -q 'Upload' ./speedtest.log; then
         local download_speed upload_speed latency
-        download_speed=$(awk '/Download/{print $3}' ./speedtest.log)
-        upload_speed=$(awk '/Upload/{print $3}' ./speedtest.log)
-        latency=$(awk '/Latency/{print $2}' ./speedtest.log)
+        # **关键修复**: 使用与原作者一致的 awk 参数，增强稳健性
+        download_speed=$(awk -F ' ' '/Download/{print $3}' ./speedtest.log)
+        upload_speed=$(awk -F ' ' '/Upload/{print $3}' ./speedtest.log)
+        latency=$(awk -F ' ' '/Latency/{print $2}' ./speedtest.log)
         
         printf "${RED}%-6s${YELLOW}%s|${GREEN}%-23s${CYAN}↑ %-10s${BLUE}↓ %-10s${PLAIN}%-8s\n" \
             "${node_id}" "${node_isp}" "${node_location}" "${upload_speed} Mbps" "${download_speed} Mbps" "${latency}"
@@ -94,7 +94,7 @@ speed_test() {
 # --- 打印脚本信息 ---
 print_intro() {
     echo "————————————————— SuperSpeed (功能修复与安全增强版) —————————————————"
-    echo "  本脚本无需Root，自动清理，修复了功能性问题，可安全、稳定使用。"
+    echo "  本脚本无需Root，自动清理，功能完整，可安全、稳定使用。"
     echo "—————————————————————————————————————————————————————————————————————"
 }
 
@@ -114,7 +114,7 @@ select_test() {
 
 # --- 根据用户选择运行测试 ---
 run_test() {
-    [[ ${selection} == 2 ]] && echo -e "${YELLOW}已取消测速。${PLAIN}" && exit 0
+    [[ ${selection} == 2 ]] && exit 0
 
     echo "—————————————————————————————————————————————————————————————————————"
     echo "ID    运营商|测速节点             上传速度    下载速度    延迟(ms)"
