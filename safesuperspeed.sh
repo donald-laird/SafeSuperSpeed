@@ -114,7 +114,8 @@ select_test() {
     echo -e "  测速类型:    ${GREEN}1.${PLAIN} 三网测速    ${GREEN}2.${PLAIN} 取消测速"
     echo -ne "               ${GREEN}3.${PLAIN} 电信节点    ${GREEN}4.${PLAIN} 联通节点    ${GREEN}5.${PLAIN} 移动节点"
     while :; do echo
-            read -p "  请输入数字选择测速类型 [1-5]: " selection
+            # **FIX**: Read from /dev/tty to ensure it works even when stdin is redirected.
+            read -p "  请输入数字选择测速类型 [1-5]: " selection < /dev/tty
             if [[ ! $selection =~ ^[1-5]$ ]]; then
                 echo -ne "  ${RED}输入错误${PLAIN}, 请输入正确的数字!"
             else
@@ -222,3 +223,4 @@ main() {
 
 # --- 脚本入口 ---
 main
+
