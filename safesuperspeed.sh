@@ -3,7 +3,7 @@
 # 作者: BlueSkyXN
 # 优化与重构: Gemini
 # 描述: 一个功能完整、安全、带自动清理功能的三网测速脚本。
-# 版本: 3.1 (解压逻辑修复)
+# 版本: 3.2 (中断处理修复)
 
 # --- 颜色定义 ---
 RED='\033[0;31m'
@@ -15,14 +15,21 @@ PLAIN='\033[0m'
 # --- 清理函数 ---
 # 无论脚本如何退出（正常完成、手动中断或出错），此函数都会被执行
 cleanup() {
-    echo -e "\n${YELLOW}正在清理临时文件...${PLAIN}"
+    # 添加一个空行以避免清理信息和用户输入行混在一起
+    echo ""
+    echo -e "\n${YELLOW}操作已结束, 正在清理临时文件...${PLAIN}"
     rm -rf speedtest.tgz speedtest-cli speedtest.log
     echo -e "${GREEN}清理完成。${PLAIN}"
 }
 
 # --- 陷阱命令 (Trap) ---
-# 捕获脚本的退出信号，并在接收到信号时执行 cleanup 函数
-trap cleanup EXIT INT QUIT TERM
+# **关键修复**: 分离中断处理和退出清理
+# 1. 捕获脚本的任何退出(EXIT)，并执行清理。这是保证清理的最后一道防线。
+trap cleanup EXIT
+# 2. 捕获用户中断信号(INT, QUIT, TERM)，并立即以状态码130退出。
+#    这个退出动作会触发上面的 EXIT trap，从而执行清理。
+trap 'exit 130' INT QUIT TERM
+
 
 # --- 检查必需的依赖命令 ---
 check_dependencies() {
@@ -54,7 +61,6 @@ setup_speedtest() {
     fi
 
     mkdir -p speedtest-cli
-    # **关键修复**: 移除了 --strip-components=1 参数以正确解压新版压缩包
     if ! tar zxf speedtest.tgz -C ./speedtest-cli/ > /dev/null 2>&1; then
         echo -e "${RED}错误: 解压 Speedtest-cli 失败。${PLAIN}"
         exit 1
