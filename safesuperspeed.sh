@@ -1,203 +1,343 @@
 #!/usr/bin/env bash
 
-# 作者: BlueSkyXN
-# 优化与重构: Gemini
-# 描述: 一个功能完整、安全、带自动清理功能的三网测速脚本。
-# 版本: 3.4 (增加备用下载源)
+# 原作者: BlueSkyXN
+# 优化: Gemini (添加了自动清理机制)
 
 # --- 颜色定义 ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+PURPLE="\033[0;35m"
 CYAN='\033[0;36m'
 PLAIN='\033[0m'
 
-# --- 清理函数 ---
-# 无论脚本如何退出（正常完成、手动中断或出错），此函数都会被执行
+# --- 关键优化: 自动清理机制 ---
+# 清理函数，用于删除脚本产生的所有临时文件
 cleanup() {
-    # 添加一个空行以避免清理信息和用户输入行混在一起
-    echo ""
     echo -e "\n${YELLOW}操作已结束, 正在清理临时文件...${PLAIN}"
     rm -rf speedtest.tgz speedtest-cli speedtest.log
     echo -e "${GREEN}清理完成。${PLAIN}"
 }
 
-# --- 陷阱命令 (Trap) ---
-# 1. 捕获脚本的任何退出(EXIT)，并执行清理。这是保证清理的最后一道防线。
+# 捕获脚本的任何退出(EXIT)，并执行清理。
 trap cleanup EXIT
-# 2. 捕获用户中断信号(INT, QUIT, TERM)，并立即以状态码130退出。
-#    这个退出动作会触发上面的 EXIT trap，从而执行清理。
+# 捕获用户中断信号(INT, QUIT, TERM)，并立即退出，从而触发上面的EXIT trap。
 trap 'exit 130' INT QUIT TERM
 
+# --- 以下为原作者脚本的核心逻辑 ---
 
-# --- 检查必需的依赖命令 ---
-check_dependencies() {
-    echo -e "${CYAN}正在检查依赖...${PLAIN}"
-    if ! command -v wget &> /dev/null || ! command -v tar &> /dev/null; then
-        echo -e "${RED}错误: 必需命令 'wget' 或 'tar' 未找到。${PLAIN}"
-        echo -e "${YELLOW}请使用您的包管理器安装它们，例如:${PLAIN}"
-        echo "  - Debian/Ubuntu: sudo apt update && sudo apt install wget tar -y"
-        echo "  - CentOS/RHEL:   sudo yum install wget tar -y"
-        exit 1
-    fi
+checkroot(){
+	[[ $EUID -ne 0 ]] && echo -e "${RED}请使用 root 用户运行本脚本！${PLAIN}" && exit 1
 }
 
-# --- 下载并准备 Speedtest-cli ---
-setup_speedtest() {
-    if [ -e './speedtest-cli/speedtest' ]; then
-        return
-    fi
-
-    echo -e "${CYAN}正在安装 Speedtest-cli...${PLAIN}"
-    local arch
-    arch=$(uname -m)
-    
-    # **关键修复**: 更新到已知可用的 1.2.0 版本，并设置主、备两个下载地址
-    local url1="https://install.speedtest.net/app/cli/ookla-speedtest-1.2.0-linux-${arch}.tgz"
-    local url2="https://dl.lamp.sh/files/ookla-speedtest-1.2.0-linux-${arch}.tgz"
-
-    # 优先尝试从官方源下载，如果失败，则自动尝试备用源
-    if ! wget --no-check-certificate -qO speedtest.tgz "${url1}"; then
-        echo -e "${YELLOW}警告: 官方源下载失败, 正在尝试备用源...${PLAIN}"
-        if ! wget --no-check-certificate -qO speedtest.tgz "${url2}"; then
-            echo -e "${RED}错误: 所有下载源均失败。请检查您的网络连接或服务器架构 (${arch}) 是否被支持。${PLAIN}"
-            exit 1
-        fi
-    fi
-
-    mkdir -p speedtest-cli
-    if ! tar zxf speedtest.tgz -C ./speedtest-cli/ > /dev/null 2>&1; then
-        echo -e "${RED}错误: 解压 Speedtest-cli 失败。压缩包可能已损坏。${PLAIN}"
-        exit 1
-    fi
-    chmod a+rx ./speedtest-cli/speedtest
+checksystem() {
+	if [ -f /etc/redhat-release ]; then
+	    release="centos"
+	elif cat /etc/issue | grep -Eqi "debian"; then
+	    release="debian"
+	elif cat /etc/issue | grep -Eqi "ubuntu"; then
+	    release="ubuntu"
+	elif cat /etc/issue | grep -Eqi "centos|red hat|redhat"; then
+	    release="centos"
+	elif cat /proc/version | grep -Eqi "debian"; then
+	    release="debian"
+	elif cat /proc/version | grep -Eqi "ubuntu"; then
+	    release="ubuntu"
+	elif cat /proc/version | grep -Eqi "centos|red hat|redhat"; then
+	    release="centos"
+	fi
 }
 
-# --- 执行单一节点的测速 ---
-speed_test() {
-    local node_id="$1"
-    local node_location="$2"
-    local node_isp="$3"
-    
-    # 使用 --accept-license 和 --accept-gdpr 参数以跳过交互式许可协议
-    ./speedtest-cli/speedtest -p no -s "$node_id" --accept-license --accept-gdpr > ./speedtest.log 2>&1
-    
-    if grep -q 'Upload' ./speedtest.log; then
-        local download_speed upload_speed latency
-        download_speed=$(awk -F ' ' '/Download/{print $3}' ./speedtest.log)
-        upload_speed=$(awk -F ' ' '/Upload/{print $3}' ./speedtest.log)
-        latency=$(awk -F ' ' '/Latency/{print $2}' ./speedtest.log)
-        
-        printf "${RED}%-6s${YELLOW}%s|${GREEN}%-23s${CYAN}↑ %-10s${BLUE}↓ %-10s${PLAIN}%-8s\n" \
-            "${node_id}" "${node_isp}" "${node_location}" "${upload_speed} Mbps" "${download_speed} Mbps" "${latency}"
-    else
-        printf "${RED}%-6s${YELLOW}%s|${GREEN}%-23s${RED}%s${PLAIN}\n" \
-            "${node_id}" "${node_isp}" "${node_location}" "测试失败"
-    fi
+checkpython() {
+	if  [ ! -e '/usr/bin/python' ]; then
+	        echo "正在安装 Python"
+	            if [ "${release}" == "centos" ]; then
+	            		yum update > /dev/null 2>&1
+	                    yum -y install python > /dev/null 2>&1
+	                    yum -y install python39 > /dev/null 2>&1
+	                    if  [ ! -e '/usr/bin/python' ]; then
+	                        ln -s /usr/bin/python3 /usr/bin/python
+	                    fi
+	                else
+	                	apt-get update > /dev/null 2>&1
+	                    apt-get -y install python > /dev/null 2>&1
+	                fi
+	        
+	fi
 }
 
-# --- 打印脚本信息 ---
-print_intro() {
-    echo "————————————————— SuperSpeed (功能修复与安全增强版) —————————————————"
-    echo "  本脚本无需Root，自动清理，功能完整，可安全、稳定使用。"
-    echo "—————————————————————————————————————————————————————————————————————"
+checkcurl() {
+	if  [ ! -e '/usr/bin/curl' ]; then
+	        echo "正在安装 Curl"
+	            if [ "${release}" == "centos" ]; then
+	                yum update > /dev/null 2>&1
+	                yum -y install curl > /dev/null 2>&1
+	            else
+	                apt-get update > /dev/null 2>&1
+	                apt-get -y install curl > /dev/null 2>&1
+	            fi
+	fi
 }
 
-# --- 显示菜单并获取用户选择 ---
-select_test() {
-    echo -e "  测速类型:    ${GREEN}1.${PLAIN} 三网精华节点    ${GREEN}2.${PLAIN} 取消测速"
-    echo -ne "               ${GREEN}3.${PLAIN} 电信          ${GREEN}4.${PLAIN} 联通          ${GREEN}5.${PLAIN} 移动"
-    while :; do echo
-            read -p "  请输入数字选择测速类型 [1-5]: " selection < /dev/tty
-            if [[ ! $selection =~ ^[1-5]$ ]]; then
-                echo -ne "  ${RED}输入错误${PLAIN}, 请输入正确的数字!"
-            else
-                break
-            fi
-    done
+checkwget() {
+	if  [ ! -e '/usr/bin/wget' ]; then
+	        echo "正在安装 Wget"
+	            if [ "${release}" == "centos" ]; then
+	                yum update > /dev/null 2>&1
+	                yum -y install wget > /dev/null 2>&1
+	            else
+	                apt-get update > /dev/null 2>&1
+	                apt-get -y install wget > /dev/null 2>&1
+	            fi
+	fi
 }
 
-# --- 根据用户选择运行测试 ---
-run_test() {
-    [[ ${selection} == 2 ]] && exit 0
 
-    echo "—————————————————————————————————————————————————————————————————————"
-    echo "ID    运营商|测速节点             上传速度    下载速度    延迟(ms)"
-    local start_time
-    start_time=$(date +%s)
-
-    # 1. 三网精华节点
-    if [[ ${selection} == 1 ]]; then
-         speed_test '3633' '上海' '电信'
-         speed_test '27594' '广东广州５Ｇ' '电信'
-         speed_test '5396' '江苏苏州５Ｇ' '电信'
-         speed_test '24447' '上海５Ｇ' '联通'
-         speed_test '26678' '广东广州５Ｇ' '联通'
-         speed_test '9484' '吉林长春' '联通'
-         speed_test '25858' '北京' '移动'
-         speed_test '17184' '天津５Ｇ' '移动'
-         speed_test '26938' '新疆乌鲁木齐５Ｇ' '移动'
-    fi
-    
-    # 3. 电信
-    if [[ ${selection} == 3 ]]; then
-         speed_test '3633' '上海' '电信'
-         speed_test '27594' '广东广州５Ｇ' '电信'
-         speed_test '26352' '江苏南京５Ｇ' '电信'
-         speed_test '5396' '江苏苏州５Ｇ' '电信'
-         speed_test '29353' '湖北武汉５Ｇ' '电信'
-         speed_test '28225' '湖南长沙５Ｇ' '电信'
-         speed_test '27377' '北京５Ｇ' '电信'
-         speed_test '3973' '甘肃兰州' '电信'
-    fi
-
-    # 4. 联通
-    if [[ ${selection} == 4 ]]; then
-         speed_test '24447' '上海５Ｇ' '联通'
-         speed_test '26678' '广东广州５Ｇ' '联通'
-         speed_test '13704' '江苏南京' '联通'
-         speed_test '5485' '湖北武汉' '联通'
-         speed_test '4870' '湖南长沙' '联通'
-         speed_test '5145' '北京' '联通'
-         speed_test '9484' '吉林长春' '联通'
-         speed_test '2461' '四川成都' '联通'
-    fi
-
-    # 5. 移动
-    if [[ ${selection} == 5 ]]; then
-         speed_test '25858' '北京' '移动'
-         speed_test '26404' '安徽合肥５Ｇ' '移动'
-         speed_test '31520' '广东中山' '移动'
-         speed_test '25883' '江西南昌５Ｇ' '移动'
-         speed_test '28491' '湖南长沙５Ｇ' '移动'
-         speed_test '16171' '福建福州' '移动'
-         speed_test '16398' '贵州贵阳' '移动'
-         speed_test '25728' '辽宁大连' '移动'
-    fi
-
-    local end_time
-    end_time=$(date +%s)
-    echo "—————————————————————————————————————————————————————————————————————"
-    local time_diff=$(( end_time - start_time ))
-    if [[ $time_diff -gt 60 ]]; then
-        printf "  测试完成, 耗时: %s 分 %s 秒\n" "$((time_diff / 60))" "$((time_diff % 60))"
-    else
-        printf "  测试完成, 耗时: %s 秒\n" "$time_diff"
-    fi
-    printf "  当前时间: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')"
-    echo "—————————————————————————————————————————————————————————————————————"
+checkspeedtest() {
+	if  [ ! -e './speedtest-cli/speedtest' ]; then
+		echo "正在安装 Speedtest-cli"
+		wget --no-check-certificate -qO speedtest.tgz https://install.speedtest.net/app/cli/ookla-speedtest-1.0.0-$(uname -m)-linux.tgz
+	fi
+	mkdir -p speedtest-cli && tar zxvf speedtest.tgz -C ./speedtest-cli/ > /dev/null 2>&1 && chmod a+rx ./speedtest-cli/speedtest
 }
 
-# --- 主函数 ---
-main() {
-    clear
-    check_dependencies
-    setup_speedtest
-    print_intro
-    select_test
-    run_test
+speed_test(){
+	speedLog="./speedtest.log"
+	true > $speedLog
+		./speedtest-cli/speedtest -p no -s $1 --accept-license > $speedLog 2>&1
+		is_upload=$(cat $speedLog | grep 'Upload')
+		if [[ ${is_upload} ]]; then
+	        local REDownload=$(cat $speedLog | awk -F ' ' '/Download/{print $3}')
+	        local reupload=$(cat $speedLog | awk -F ' ' '/Upload/{print $3}')
+	        local relatency=$(cat $speedLog | awk -F ' ' '/Latency/{print $2}')
+	        
+			local nodeID=$1
+			local nodeLocation=$2
+			local nodeISP=$3
+			
+			strnodeLocation="${nodeLocation}　　　　　　"
+			LANG=C
+			
+			temp=$(echo "${REDownload}" | awk -F ' ' '{print $1}')
+	        if [[ $(awk -v num1=${temp} -v num2=0 'BEGIN{print(num1>num2)?"1":"0"}') -eq 1 ]]; then
+	        	printf "${RED}%-6s${YELLOW}%s%s${GREEN}%-24s${CYAN}%s%-10s${BLUE}%s%-10s${PURPLE}%-8s${PLAIN}\n" "${nodeID}"  "${nodeISP}" "|" "${strnodeLocation:0:24}" "↑ " "${reupload}" "↓ " "${REDownload}" "${relatency}"
+			fi
+		else
+	        # 如果测试失败，也打印一行提示
+            printf "${RED}%-6s${YELLOW}%s%s${GREEN}%-24s${RED}%s${PLAIN}\n" "${nodeID}" "${nodeISP}" "|" "${strnodeLocation:0:24}" "测试失败"
+		fi
 }
 
-# --- 脚本入口 ---
-main
+preinfo() {
+	echo "———————————————————SuperSpeed 全面测速版 (安全增强)——————————————————"
+	echo "       bash <(curl -Lso- https://raw.githubusercontent.com/BlueSkyXN/SpeedTestCN/main/superspeed.sh)"
+    echo "       此版本基于原版优化，增加了完整的自动清理机制"
+	echo "——————————————————————————————————————————————————————————"
+}
 
+selecttest() {
+	echo -e "  测速类型:    ${GREEN}1.${PLAIN} 三网测速    ${GREEN}2.${PLAIN} 取消测速"
+	echo -ne "               ${GREEN}3.${PLAIN} 电信节点    ${GREEN}4.${PLAIN} 联通节点    ${GREEN}5.${PLAIN} 移动节点"
+	while :; do echo
+			# 从终端读取输入，避免管道问题
+			read -p "  请输入数字选择测速类型: " selection < /dev/tty
+			if [[ ! $selection =~ ^[1-5]$ ]]; then
+					echo -ne "  ${RED}输入错误${PLAIN}, 请输入正确的数字!"
+			else
+					break   
+			fi
+	done
+}
+
+runtest() {
+	[[ ${selection} == 2 ]] && exit 1
+
+	if [[ ${selection} == 1 || ${selection} == 3 ]]; then
+		echo "——————————————————————————————————————————————————————————"
+		echo "ID    测速服务器信息       上传/Mbps   下载/Mbps   延迟/ms"
+	fi
+
+	if [[ ${selection} == 1 ]]; then
+		start=$(date +%s) 
+		 speed_test '3633' '上海' '电信'
+		 speed_test '27594' '广东广州５Ｇ' '电信'
+		 speed_test '5396' '江苏苏州５Ｇ' '电信'
+		 speed_test '24447' '上海５Ｇ' '联通'
+		 speed_test '26678' '广东广州５Ｇ' '联通'
+		 speed_test '5485' '湖北武汉' '联通'
+		 speed_test '25858' '北京' '移动'
+		 speed_test '17184' '天津５Ｇ' '移动'
+		 speed_test '26938' '新疆乌鲁木齐５Ｇ' '移动'
+		end=$(date +%s)
+		echo "——————————————————————————————————————————————————————————"
+		time=$(( $end - $start ))
+		if [[ $time -gt 60 ]]; then
+			min=$(expr $time / 60)
+			sec=$(expr $time % 60)
+			echo -ne "  测试完成, 本次测速耗时: ${min} 分 ${sec} 秒"
+		else
+			echo -ne "  测试完成, 本次测速耗时: ${time} 秒"
+		fi
+		echo -ne "\n  当前时间: "
+		echo $(date +%Y-%m-%d" "%H:%M:%S)
+		echo -e "  ${GREEN}# 三网测速中为避免节点数不均及测试过久，每部分未使用所${PLAIN}"
+		echo -e "  ${GREEN}# 有节点，如果需要使用全部节点，可分别选择三网节点检测${PLAIN}"
+	fi
+
+	if [[ ${selection} == 3 ]]; then
+		start=$(date +%s) 
+		 speed_test '3633' '上海' '电信'
+		 speed_test '24012' '内蒙古呼和浩特' '电信'
+		 speed_test '27377' '北京５Ｇ' '电信'
+		 speed_test '29026' '四川成都' '电信'
+		 speed_test '29071' '四川成都' '电信'
+		 speed_test '17145' '安徽合肥５Ｇ' '电信'
+		 speed_test '27594' '广东广州５Ｇ' '电信'
+		 speed_test '27810' '广西南宁' '电信'
+		 speed_test '27575' '新疆乌鲁木齐' '电信'
+		 speed_test '26352' '江苏南京５Ｇ' '电信'
+		 speed_test '5396' '江苏苏州５Ｇ' '电信'
+		 speed_test '5317' '江苏连云港５Ｇ' '电信'
+		 speed_test '7509' '浙江杭州' '电信'
+		 speed_test '23844' '湖北武汉' '电信'
+		 speed_test '29353' '湖北武汉５Ｇ' '电信'
+		 speed_test '28225' '湖南长沙５Ｇ' '电信'
+		 speed_test '3973' '甘肃兰州' '电信'
+		 speed_test '19076' '重庆' '电信'
+		end=$(date +%s)
+		echo "——————————————————————————————————————————————————————————"
+		time=$(( $end - $start ))
+		if [[ $time -gt 60 ]]; then
+			min=$(expr $time / 60)
+			sec=$(expr $time % 60)
+			echo -ne "  测试完成, 本次测速耗时: ${min} 分 ${sec} 秒"
+		else
+			echo -ne "  测试完成, 本次测速耗时: ${time} 秒"
+		fi
+		echo -ne "\n  当前时间: "
+		echo $(date +%Y-%m-%d" "%H:%M:%S)
+	fi
+
+	if [[ ${selection} == 4 ]]; then
+		echo "——————————————————————————————————————————————————————————"
+		echo "ID    测速服务器信息       上传/Mbps   下载/Mbps   延迟/ms"
+		start=$(date +%s) 
+		 speed_test '21005' '上海' '联通'
+		 speed_test '24447' '上海５Ｇ' '联通'
+		 speed_test '5103' '云南昆明' '联通'
+		 speed_test '5145' '北京' '联通'
+		 speed_test '5505' '北京' '联通'
+		 speed_test '9484' '吉林长春' '联通'
+		 speed_test '2461' '四川成都' '联通'
+		 speed_test '27154' '天津５Ｇ' '联通'
+		 speed_test '5509' '宁夏银川' '联通'
+		 speed_test '5724' '安徽合肥' '联通'
+		 speed_test '5039' '山东济南' '联通'
+		 speed_test '26180' '山东济南５Ｇ' '联通'
+		 speed_test '26678' '广东广州５Ｇ' '联通'
+		 speed_test '16192' '广东深圳' '联通'
+		 speed_test '6144' '新疆乌鲁木齐' '联通'
+		 speed_test '13704' '江苏南京' '联通'
+		 speed_test '5485' '湖北武汉' '联通'
+		 speed_test '26677' '湖南株洲' '联通'
+		 speed_test '4870' '湖南长沙' '联通'
+		 speed_test '4690' '甘肃兰州' '联通'
+		 speed_test '4884' '福建福州' '联通'
+		 speed_test '31985' '重庆' '联通'
+		 speed_test '4863' '陕西西安' '联通'
+		end=$(date +%s)
+		echo "——————————————————————————————————————————————————————————"
+		time=$(( $end - $start ))
+		if [[ $time -gt 60 ]]; then
+			min=$(expr $time / 60)
+			sec=$(expr $time % 60)
+			echo -ne "  测试完成, 本次测速耗时: ${min} 分 ${sec} 秒"
+		else
+			echo -ne "  测试完成, 本次测速耗时: ${time} 秒"
+		fi
+		echo -ne "\n  当前时间: "
+		echo $(date +%Y-%m-%d" "%H:%M:%S)
+	fi
+
+	if [[ ${selection} == 5 ]]; then
+		echo "——————————————————————————————————————————————————————————"
+		echo "ID    测速服务器信息       上传/Mbps   下载/Mbps   延迟/ms"
+		start=$(date +%s) 
+		 speed_test '30154' '上海' '移动'
+		 speed_test '25637' '上海５Ｇ' '移动'
+		 speed_test '26728' '云南昆明' '移动'
+		 speed_test '27019' '内蒙古呼和浩特' '移动'
+		 speed_test '30232' '内蒙呼和浩特５Ｇ' '移动'
+		 speed_test '30293' '内蒙古通辽５Ｇ' '移动'
+		 speed_test '25858' '北京' '移动'
+		 speed_test '16375' '吉林长春' '移动'
+		 speed_test '24337' '四川成都' '移动'
+		 speed_test '17184' '天津５Ｇ' '移动'
+		 speed_test '26940' '宁夏银川' '移动'
+		 speed_test '31815' '宁夏银川' '移动'
+		 speed_test '26404' '安徽合肥５Ｇ' '移动'
+		 speed_test '27151' '山东临沂５Ｇ' '移动'
+		 speed_test '25881' '山东济南５Ｇ' '移动'
+		 speed_test '27100' '山东青岛５Ｇ' '移动'
+		 speed_test '26501' '山西太原５Ｇ' '移动'
+		 speed_test '31520' '广东中山' '移动'
+		 speed_test '6611' '广东广州' '移动'
+		 speed_test '4515' '广东深圳' '移动'
+		 speed_test '15863' '广西南宁' '移动'
+		 speed_test '16858' '新疆乌鲁木齐' '移动'
+		 speed_test '26938' '新疆乌鲁木齐５Ｇ' '移动'
+		 speed_test '17227' '新疆和田' '移动'
+		 speed_test '17245' '新疆喀什' '移动'
+		 speed_test '17222' '新疆阿勒泰' '移动'
+		 speed_test '27249' '江苏南京５Ｇ' '移动'
+		 speed_test '21845' '江苏常州５Ｇ' '移动'
+		 speed_test '26850' '江苏无锡５Ｇ' '移动'
+		 speed_test '17320' '江苏镇江５Ｇ' '移动'
+		 speed_test '25883' '江西南昌５Ｇ' '移动'
+		 speed_test '17223' '河北石家庄' '移动'
+		 speed_test '26331' '河南郑州５Ｇ' '移动'
+		 speed_test '6715' '浙江宁波５Ｇ' '移动'
+		 speed_test '4647' '浙江杭州' '移动'
+		 speed_test '16503' '海南海口' '移动'
+		 speed_test '28491' '湖南长沙５Ｇ' '移动'
+		 speed_test '16145' '甘肃兰州' '移动'
+		 speed_test '16171' '福建福州' '移动'
+		 speed_test '18444' '西藏拉萨' '移动'
+		 speed_test '16398' '贵州贵阳' '移动'
+		 speed_test '25728' '辽宁大连' '移动'
+		 speed_test '16167' '辽宁沈阳' '移动'
+		 speed_test '17584' '重庆' '移动'
+		 speed_test '26380' '陕西西安' '移动'
+		 speed_test '29105' '陕西西安５Ｇ' '移动'
+		 speed_test '29083' '青海西宁５Ｇ' '移动'
+		 speed_test '26656' '黑龙江哈尔滨' '移动'
+		end=$(date +%s)
+		echo "——————————————————————————————————————————————————————————"
+		time=$(( $end - $start ))
+		if [[ $time -gt 60 ]]; then
+			min=$(expr $time / 60)
+			sec=$(expr $time % 60)
+			echo -ne "  测试完成, 本次测速耗时: ${min} 分 ${sec} 秒"
+		else
+			echo -ne "  测试完成, 本次测速耗时: ${time} 秒"
+		fi
+		echo -ne "\n  当前时间: "
+		echo $(date +%Y-%m-%d" "%H:%M:%S)
+	fi
+}
+
+runall() {
+	checkroot;
+	checksystem;
+	checkpython;
+	checkcurl;
+	checkwget;
+	checkspeedtest;
+	clear;
+	preinfo;
+	selecttest;
+	runtest;
+}
+
+runall
